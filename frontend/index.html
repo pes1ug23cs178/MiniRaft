@@ -1,0 +1,666 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+  <title>Distributed Drawing Board Ã¢â‚¬â€ Raft Classroom Demo</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    :root {
+      --bg: #0a0c12;
+      --surface: #11141f;
+      --surface-elevated: #1a1f2e;
+      --border: #252b3d;
+      --border-glow: #2d3448;
+      --text: #f0f3fa;
+      --text-secondary: #9aa2b9;
+      --muted: #5e677e;
+      --accent: #8b5cf6;
+      --accent-glow: rgba(139, 92, 246, 0.4);
+      --leader: #10b981;
+      --follower: #3b82f6;
+      --candidate: #f59e0b;
+      --dead: #6b7280;
+      --danger: #ef4444;
+      --success: #22c55e;
+      --warning: #eab308;
+    }
+
+    body {
+      background: radial-gradient(circle at 10% 20%, #0c0f1a, #07090f);
+      color: var(--text);
+      font-family: 'Inter', 'SF Mono', 'Fira Code', system-ui, -apple-system, monospace;
+      padding: 20px;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 20px;
+    }
+
+    /* modern glassmorphic header */
+    header {
+      width: 100%;
+      max-width: 1200px;
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 12px;
+      background: rgba(17, 20, 31, 0.7);
+      backdrop-filter: blur(12px);
+      padding: 12px 24px;
+      border-radius: 60px;
+      border: 1px solid rgba(45, 52, 72, 0.6);
+      box-shadow: 0 8px 20px rgba(0, 0, 0, 0.3);
+    }
+
+    header h1 {
+      font-size: 1.25rem;
+      font-weight: 600;
+      background: linear-gradient(135deg, #fff, #a78bfa);
+      background-clip: text;
+      -webkit-background-clip: text;
+      color: transparent;
+      letter-spacing: -0.3px;
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    header h1::before {
+      content: "Ã°Å¸Å½Â¨";
+      font-size: 1.4rem;
+      background: none;
+      color: var(--accent);
+    }
+
+    #ws-status {
+      font-size: 0.7rem;
+      font-weight: 500;
+      padding: 6px 16px;
+      border-radius: 40px;
+      background: rgba(0, 0, 0, 0.5);
+      backdrop-filter: blur(4px);
+      border: 1px solid var(--border);
+      transition: all 0.2s ease;
+      font-family: monospace;
+    }
+
+    #ws-status.connected {
+      background: rgba(16, 185, 129, 0.12);
+      border-color: var(--leader);
+      color: var(--leader);
+      box-shadow: 0 0 8px rgba(16, 185, 129, 0.3);
+    }
+
+    #ws-status.disconnected {
+      background: rgba(239, 68, 68, 0.1);
+      border-color: var(--danger);
+      color: var(--danger);
+    }
+
+    /* dashboard cards Ã¢â‚¬â€ enhanced with hover effects */
+    #dashboard {
+      width: 100%;
+      max-width: 1200px;
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 18px;
+    }
+
+    .replica-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 24px;
+      padding: 18px 16px;
+      transition: all 0.25s cubic-bezier(0.2, 0.9, 0.4, 1.1);
+      box-shadow: 0 5px 12px rgba(0, 0, 0, 0.2);
+      backdrop-filter: blur(2px);
+    }
+
+    .replica-card:hover {
+      transform: translateY(-3px);
+      border-color: var(--border-glow);
+      box-shadow: 0 12px 24px rgba(0, 0, 0, 0.3);
+    }
+
+    .replica-card.leader {
+      border-left: 4px solid var(--leader);
+      background: linear-gradient(145deg, #111827, #0f172a);
+      box-shadow: 0 0 12px rgba(16, 185, 129, 0.2);
+    }
+
+    .replica-card.follower {
+      border-left: 4px solid var(--follower);
+    }
+
+    .replica-card.candidate {
+      border-left: 4px solid var(--candidate);
+    }
+
+    .replica-card.dead {
+      opacity: 0.65;
+      filter: grayscale(0.15);
+      border-left: 4px solid var(--dead);
+    }
+
+    .card-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 12px;
+    }
+
+    .card-id {
+      font-weight: 700;
+      font-size: 1rem;
+      background: rgba(255, 255, 255, 0.05);
+      padding: 4px 10px;
+      border-radius: 40px;
+      letter-spacing: -0.2px;
+    }
+
+    .role-badge {
+      font-size: 0.65rem;
+      font-weight: 800;
+      text-transform: uppercase;
+      padding: 5px 12px;
+      border-radius: 30px;
+      backdrop-filter: blur(4px);
+      letter-spacing: 0.5px;
+    }
+
+    .badge-leader {
+      background: rgba(16, 185, 129, 0.2);
+      color: var(--leader);
+      border: 1px solid rgba(16, 185, 129, 0.4);
+    }
+
+    .badge-follower {
+      background: rgba(59, 130, 246, 0.2);
+      color: var(--follower);
+      border: 1px solid rgba(59, 130, 246, 0.4);
+    }
+
+    .badge-candidate {
+      background: rgba(245, 158, 11, 0.2);
+      color: var(--candidate);
+      border: 1px solid rgba(245, 158, 11, 0.4);
+    }
+
+    .badge-dead {
+      background: rgba(107, 114, 128, 0.2);
+      color: var(--dead);
+    }
+
+    .card-stats {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px 16px;
+      background: rgba(0, 0, 0, 0.3);
+      padding: 10px 12px;
+      border-radius: 18px;
+      margin-top: 6px;
+    }
+
+    .card-stats span:first-child {
+      font-size: 0.7rem;
+      color: var(--text-secondary);
+      text-transform: uppercase;
+      font-weight: 500;
+    }
+
+    .stat-val {
+      font-weight: 700;
+      font-family: 'Fira Mono', monospace;
+      font-size: 0.85rem;
+      color: var(--text);
+      background: rgba(255, 255, 255, 0.03);
+      padding: 2px 8px;
+      border-radius: 12px;
+      text-align: right;
+    }
+
+    /* canvas container premium */
+    #canvas-wrap {
+      width: 100%;
+      max-width: 1200px;
+      background: var(--surface-elevated);
+      border-radius: 28px;
+      border: 1px solid var(--border);
+      overflow: hidden;
+      box-shadow: 0 20px 35px -12px black;
+      transition: all 0.2s;
+    }
+
+    #toolbar {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      padding: 14px 20px;
+      background: rgba(17, 20, 31, 0.85);
+      backdrop-filter: blur(8px);
+      border-bottom: 1px solid rgba(45, 52, 72, 0.7);
+      flex-wrap: wrap;
+    }
+
+    #toolbar label {
+      font-size: 0.75rem;
+      font-weight: 500;
+      color: var(--text-secondary);
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      background: rgba(0, 0, 0, 0.3);
+      padding: 6px 14px;
+      border-radius: 40px;
+      letter-spacing: 0.3px;
+    }
+
+    input[type="color"] {
+      width: 32px;
+      height: 32px;
+      border: 2px solid var(--border-glow);
+      border-radius: 12px;
+      cursor: pointer;
+      background: var(--surface);
+      padding: 2px;
+      transition: 0.1s linear;
+    }
+
+    input[type="range"] {
+      width: 100px;
+      accent-color: var(--accent);
+      background: var(--border);
+      border-radius: 10px;
+    }
+
+    button {
+      font-family: inherit;
+      font-weight: 600;
+      font-size: 0.75rem;
+      padding: 7px 18px;
+      border-radius: 40px;
+      border: none;
+      background: rgba(45, 52, 72, 0.8);
+      color: var(--text);
+      cursor: pointer;
+      transition: all 0.2s ease;
+      backdrop-filter: blur(4px);
+      border: 1px solid var(--border);
+    }
+
+    button:hover {
+      background: var(--accent);
+      color: white;
+      border-color: var(--accent);
+      transform: scale(0.97);
+      box-shadow: 0 0 8px var(--accent-glow);
+    }
+
+    button.danger {
+      background: rgba(239, 68, 68, 0.15);
+      border-color: rgba(239, 68, 68, 0.5);
+    }
+
+    button.danger:hover {
+      background: var(--danger);
+      color: white;
+      border-color: var(--danger);
+    }
+
+    canvas {
+      display: block;
+      width: 100%;
+      cursor: crosshair;
+      background: #ffffff;
+      box-shadow: inset 0 0 20px rgba(0, 0, 0, 0.05);
+    }
+
+    /* extra style for nice shadow and indicator */
+    .status-indicator {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--muted);
+      margin-right: 8px;
+      box-shadow: 0 0 2px currentColor;
+    }
+
+    .connected .status-indicator {
+      background: var(--leader);
+      box-shadow: 0 0 6px var(--leader);
+    }
+
+    footer {
+      font-size: 0.7rem;
+      color: var(--muted);
+      text-align: center;
+      padding: 12px;
+      border-top: 1px solid rgba(45, 52, 72, 0.4);
+      width: 100%;
+      max-width: 1200px;
+      margin-top: 8px;
+    }
+
+    @media (max-width: 780px) {
+      #dashboard {
+        gap: 10px;
+      }
+      .card-stats {
+        grid-template-columns: 1fr;
+      }
+      #toolbar {
+        gap: 8px;
+      }
+      button {
+        padding: 5px 12px;
+      }
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>Distributed Drawing Board Ã‚Â· RAFT Consensus</h1>
+  <div id="ws-status">
+    <span class="status-indicator"></span>
+    <span id="ws-text">ConnectingÃ¢â‚¬Â¦</span>
+  </div>
+</header>
+
+<!-- Enhanced cluster dashboard (observability) -->
+<div id="dashboard">
+  <div class="replica-card dead" id="card-replica1">
+    <div class="card-header">
+      <span class="card-id">replica1</span>
+      <span class="role-badge badge-dead">Ã¢â‚¬â€</span>
+    </div>
+    <div class="card-stats">
+      <span>term</span>  <span class="stat-val" id="r1-term">Ã¢â‚¬â€</span>
+      <span>log</span>   <span class="stat-val" id="r1-log">Ã¢â‚¬â€</span>
+      <span>commit</span><span class="stat-val" id="r1-commit">Ã¢â‚¬â€</span>
+    </div>
+  </div>
+  <div class="replica-card dead" id="card-replica2">
+    <div class="card-header">
+      <span class="card-id">replica2</span>
+      <span class="role-badge badge-dead">Ã¢â‚¬â€</span>
+    </div>
+    <div class="card-stats">
+      <span>term</span>  <span class="stat-val" id="r2-term">Ã¢â‚¬â€</span>
+      <span>log</span>   <span class="stat-val" id="r2-log">Ã¢â‚¬â€</span>
+      <span>commit</span><span class="stat-val" id="r2-commit">Ã¢â‚¬â€</span>
+    </div>
+  </div>
+  <div class="replica-card dead" id="card-replica3">
+    <div class="card-header">
+      <span class="card-id">replica3</span>
+      <span class="role-badge badge-dead">Ã¢â‚¬â€</span>
+    </div>
+    <div class="card-stats">
+      <span>term</span>  <span class="stat-val" id="r3-term">Ã¢â‚¬â€</span>
+      <span>log</span>   <span class="stat-val" id="r3-log">Ã¢â‚¬â€</span>
+      <span>commit</span><span class="stat-val" id="r3-commit">Ã¢â‚¬â€</span>
+    </div>
+  </div>
+</div>
+
+<!-- Canvas + toolset -->
+<div id="canvas-wrap">
+  <div id="toolbar">
+    <label>Ã°Å¸Å½Â¨ Color <input type="color" id="color" value="#1e293b"></label>
+    <label>Ã¢Å“ÂÃ¯Â¸Â Size <input type="range" id="size" min="2" max="30" value="4"></label>
+    <button id="eraserBtn">Ã°Å¸Â§Â½ Eraser</button>
+    <button id="clearBtn" class="danger">Ã°Å¸â€”â€˜Ã¯Â¸Â Clear All</button>
+    <div style="flex:1"></div>
+    <span style="font-size:0.7rem; background:#00000030; padding:4px 12px; border-radius:20px;">Ã¢Å“ÂÃ¯Â¸Â Draw anywhere</span>
+  </div>
+  <canvas id="canvas" width="1000" height="560"></canvas>
+</div>
+
+<script>
+  // ========== CANVAS SETUP ==========
+  const canvas = document.getElementById('canvas');
+  const ctx = canvas.getContext('2d');
+  const colorPicker = document.getElementById('color');
+  const sizePicker = document.getElementById('size');
+  const wsStatusSpan = document.getElementById('ws-text');
+  const wsStatusDiv = document.getElementById('ws-status');
+
+  let drawing = false;
+  let lastX = 0, lastY = 0;
+  let eraserMode = false;
+
+  // Helper for eraser
+  function setEraser() {
+    eraserMode = true;
+    colorPicker.value = '#ffffff';
+  }
+  // when color changes, exit eraser mode
+  colorPicker.addEventListener('input', () => { eraserMode = false; });
+
+  // attach UI buttons
+  const eraserBtn = document.getElementById('eraserBtn');
+  const clearBtn = document.getElementById('clearBtn');
+  eraserBtn.onclick = () => setEraser();
+  clearBtn.onclick = () => clearCanvas();
+
+  // ----- DYNAMIC SERVICE URLS -----
+  function getGatewayWsUrl() {
+    const host = window.location.hostname || 'localhost';
+    return `ws://${host}:8080`;
+  }
+
+  function getReplicaHttpUrl(port) {
+    const host = window.location.hostname || 'localhost';
+    return `http://${host}:${port}`;
+  }
+
+  // ----- WebSocket connection and reconnect -----
+  let ws;
+  let reconnectAttempts = 0;
+  let heartbeatInterval = null;
+
+  function connectWebSocket() {
+    ws = new WebSocket(getGatewayWsUrl());
+
+    if (heartbeatInterval) { clearInterval(heartbeatInterval); heartbeatInterval = null; }
+
+    ws.onopen = () => {
+      if (wsStatusSpan) wsStatusSpan.textContent = 'Connected';
+      wsStatusDiv.className = 'connected';
+      reconnectAttempts = 0;
+      heartbeatInterval = setInterval(() => {
+        if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'ping' }));
+      }, 30000);
+    };
+
+    ws.onclose = () => {
+      if (wsStatusSpan) wsStatusSpan.textContent = 'ReconnectingÃ¢â‚¬Â¦';
+      wsStatusDiv.className = 'disconnected';
+      if (heartbeatInterval) { clearInterval(heartbeatInterval); heartbeatInterval = null; }
+      reconnectAttempts++;
+      setTimeout(connectWebSocket, Math.min(8000, 500 * Math.pow(2, reconnectAttempts)));
+    };
+
+    ws.onerror = () => {
+      if (wsStatusSpan) wsStatusSpan.textContent = 'Error';
+      wsStatusDiv.className = 'disconnected';
+    };
+
+    ws.onmessage = ({ data }) => {
+      try {
+        const msg = JSON.parse(data);
+        if (msg.type === 'pong') return;
+        if (msg.type === 'clear') {
+          ctx.clearRect(0, 0, canvas.width, canvas.height);
+          return;
+        }
+        drawStroke(msg, false);
+      } catch (_) {}
+    };
+  }
+
+  connectWebSocket();
+
+  // ----- Drawing core -----
+  function drawStroke(stroke, send = true) {
+    ctx.beginPath();
+    ctx.moveTo(stroke.x0, stroke.y0);
+    ctx.lineTo(stroke.x1, stroke.y1);
+    ctx.strokeStyle = stroke.color;
+    ctx.lineWidth = stroke.size;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.stroke();
+    if (send && ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify(stroke));
+    }
+  }
+
+  function getPos(e) {
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    let clientX, clientY;
+    if (e.touches) {
+      clientX = e.touches[0].clientX;
+      clientY = e.touches[0].clientY;
+      e.preventDefault();
+    } else {
+      clientX = e.clientX;
+      clientY = e.clientY;
+    }
+    return {
+      x: (clientX - rect.left) * scaleX,
+      y: (clientY - rect.top) * scaleY,
+    };
+  }
+
+  // pointer / mouse events
+  canvas.addEventListener('pointerdown', (e) => {
+    drawing = true;
+    const p = getPos(e);
+    lastX = p.x; lastY = p.y;
+    canvas.setPointerCapture(e.pointerId);
+    e.preventDefault();
+  });
+  canvas.addEventListener('pointermove', (e) => {
+    if (!drawing) return;
+    e.preventDefault();
+    const p = getPos(e);
+    const stroke = {
+      x0: lastX, y0: lastY,
+      x1: p.x, y1: p.y,
+      color: colorPicker.value,
+      size: parseInt(sizePicker.value)
+    };
+    drawStroke(stroke, true);
+    lastX = p.x; lastY = p.y;
+  });
+  canvas.addEventListener('pointerup', () => { drawing = false; });
+  canvas.addEventListener('pointerleave', () => { drawing = false; });
+
+  // touch compatibility
+  canvas.addEventListener('touchstart', (e) => {
+    e.preventDefault();
+    const rect = canvas.getBoundingClientRect();
+    const touch = e.touches[0];
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    lastX = (touch.clientX - rect.left) * scaleX;
+    lastY = (touch.clientY - rect.top) * scaleY;
+    drawing = true;
+  });
+  canvas.addEventListener('touchmove', (e) => {
+    if (!drawing) return;
+    e.preventDefault();
+    const rect = canvas.getBoundingClientRect();
+    const touch = e.touches[0];
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    const currentX = (touch.clientX - rect.left) * scaleX;
+    const currentY = (touch.clientY - rect.top) * scaleY;
+    const stroke = {
+      x0: lastX, y0: lastY,
+      x1: currentX, y1: currentY,
+      color: colorPicker.value,
+      size: parseInt(sizePicker.value)
+    };
+    drawStroke(stroke, true);
+    lastX = currentX;
+    lastY = currentY;
+  });
+  canvas.addEventListener('touchend', () => { drawing = false; });
+
+  function clearCanvas() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'clear', timestamp: Date.now() }));
+    }
+  }
+
+  // ----- CLUSTER STATUS POLLING -----
+  const REPLICAS = [
+    { id: 'replica1', url: getReplicaHttpUrl(4001), prefix: 'r1' },
+    { id: 'replica2', url: getReplicaHttpUrl(4002), prefix: 'r2' },
+    { id: 'replica3', url: getReplicaHttpUrl(4003), prefix: 'r3' },
+  ];
+
+  async function pollReplica({ id, url, prefix }) {
+    const card = document.getElementById(`card-${id}`);
+    if (!card) return;
+    const badge = card.querySelector('.role-badge');
+    try {
+      const res = await fetch(`${url}/status`, { signal: AbortSignal.timeout(800) });
+      const data = await res.json();
+      const role = data.role || 'unknown';
+      let roleClass = '';
+      if (role === 'leader') roleClass = 'leader';
+      else if (role === 'follower') roleClass = 'follower';
+      else if (role === 'candidate') roleClass = 'candidate';
+      else roleClass = 'dead';
+      card.className = `replica-card ${roleClass}`;
+      if (badge) {
+        badge.className = `role-badge badge-${role}`;
+        badge.textContent = role.toUpperCase();
+      }
+      document.getElementById(`${prefix}-term`).textContent = data.term ?? 'Ã¢â‚¬â€';
+      document.getElementById(`${prefix}-log`).textContent = data.logLength ?? 'Ã¢â‚¬â€';
+      document.getElementById(`${prefix}-commit`).textContent = data.commitIndex ?? 'Ã¢â‚¬â€';
+    } catch (_) {
+      card.className = 'replica-card dead';
+      if (badge) {
+        badge.className = 'role-badge badge-dead';
+        badge.textContent = 'DEAD';
+      }
+      document.getElementById(`${prefix}-term`).textContent = 'Ã¢â‚¬â€';
+      document.getElementById(`${prefix}-log`).textContent = 'Ã¢â‚¬â€';
+      document.getElementById(`${prefix}-commit`).textContent = 'Ã¢â‚¬â€';
+    }
+  }
+
+  function pollAllReplicas() {
+    REPLICAS.forEach(r => pollReplica(r));
+  }
+
+  pollAllReplicas();
+  setInterval(pollAllReplicas, 1500);
+
+  // final visual: set canvas background white and initial default color to a nice dark blue
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = '#000000';
+  // ensure default stroke looks good
+  colorPicker.value = '#1e293b';
+</script>
+</body>
+</html>
