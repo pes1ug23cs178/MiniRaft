@@ -1,72 +1,303 @@
-# Distributed Drawing Board: a small Raft classroom project
+# Distributed Real-Time Drawing Board
 
-This project is an intentionally small, readable example of a replicated drawing board. A browser sends drawing commands over WebSocket to a gateway. The gateway finds the current Raft leader, forwards the command, and broadcasts only committed commands back to connected browsers.
+## Mini-RAFT Consensus Project
+
+A Dockerized collaborative drawing board built to demonstrate the core ideas
+behind distributed systems:
+
+- leader election
+- replicated logs
+- majority-based commits
+- failure detection and recovery
+- real-time WebSocket communication
+- containerized services with hot reload
+
+The project uses a small, classroom-friendly Raft-like protocol. It is designed
+for learning and demonstration rather than production data durability.
+
+## What the application does
+
+Users draw on a shared browser canvas. Every stroke and clear operation is sent
+to a WebSocket gateway. The gateway forwards commands to the current Raft
+leader. The leader replicates each command to the other replicas and broadcasts
+it to connected clients only after a majority of replicas acknowledge it.
+
+If a leader fails, the remaining replicas elect a new leader and the gateway
+automatically redirects new commands to that leader.
 
 ## Architecture
 
 ```text
-browser (nginx :3000) --WebSocket--> gateway (:8080, health :8081)
-                                      |-- replica1 (:4001)
-                                      |-- replica2 (:4002)
-                                      `-- replica3 (:4003)
+                         WebSocket :8080
+┌──────────────┐       ┌────────────────┐
+│ Browser tabs │──────▶│    Gateway     │
+└──────────────┘       │ HTTP :8081     │
+                       └───────┬────────┘
+                               │
+              ┌────────────────┼────────────────┐
+              │                │                │
+       ┌──────▼─────┐   ┌──────▼─────┐   ┌──────▼─────┐
+       │  Replica 1 │   │  Replica 2 │   │  Replica 3 │
+       │   :4001    │   │   :4002    │   │   :4003    │
+       └────────────┘   └────────────┘   └────────────┘
 ```
 
-Each replica is an independent Node.js process. It starts as a follower, uses a randomized 500–800 ms election timer, and sends leader heartbeats every 150 ms. A candidate requests votes and becomes leader after a majority. Leaders replicate commands with AppendEntries and commit an entry only after a majority acknowledges it.
+| Service | Port | Responsibility |
+| --- | ---: | --- |
+| `frontend` | `3000` | Serves the HTML canvas application through nginx |
+| `gateway` | `8080` | Accepts WebSocket clients and routes drawing commands |
+| `gateway` | `8081` | Provides health, broadcast, and leader-announcement endpoints |
+| `replica1` | `4001` | Raft node |
+| `replica2` | `4002` | Raft node |
+| `replica3` | `4003` | Raft node |
 
-## Run
+All services communicate through the `raft-net` Docker network.
 
-Requirements: Docker and Docker Compose.
+## Mini-RAFT protocol
+
+Each replica can be in one of three states:
+
+1. **Follower** — waits for heartbeats and votes for eligible candidates.
+2. **Candidate** — starts an election after its timer expires.
+3. **Leader** — accepts commands, replicates log entries, and commits them.
+
+### Timing rules
+
+- Election timeout: random value between 500 and 800 milliseconds
+- Heartbeat interval: 150 milliseconds
+- Cluster size: 3 replicas
+- Required majority: 2 replicas
+
+### Command flow
+
+```text
+Browser
+  │
+  │ WebSocket command
+  ▼
+Gateway
+  │
+  │ POST /command
+  ▼
+Leader
+  │
+  │ POST /append-entries
+  ├──────────────▶ Follower 1
+  └──────────────▶ Follower 2
+          │
+          │ majority acknowledgement
+          ▼
+       Commit entry
+          │
+          ├── apply command locally
+          ├── notify gateway
+          └── broadcast to WebSocket clients
+```
+
+Committed entries are applied in log order. A follower rejects stale terms and
+resets its election timer whenever it receives a valid leader message.
+
+## Replica API
+
+The same API is available on ports `4001`, `4002`, and `4003`.
+
+| Method | Endpoint | Purpose |
+| --- | --- | --- |
+| `GET` | `/health` | Lightweight health and role information |
+| `GET` | `/status` | Detailed role, term, log, and commit information |
+| `POST` | `/request-vote` | Candidate requests a vote |
+| `POST` | `/append-entries` | Leader replicates log entries |
+| `POST` | `/heartbeat` | Leader liveness message without log entries |
+| `GET` | `/sync-log` | Read committed log entries for inspection or replay |
+| `POST` | `/sync-log` | Leader-to-follower incremental catch-up |
+| `POST` | `/command` | Leader accepts a drawing command |
+
+### RequestVote payload
+
+```json
+{
+  "term": 3,
+  "candidateId": "replica2",
+  "lastLogIndex": 7,
+  "lastLogTerm": 3
+}
+```
+
+### AppendEntries payload
+
+```json
+{
+  "term": 3,
+  "leaderId": "http://replica1:4001",
+  "prevLogIndex": 6,
+  "prevLogTerm": 3,
+  "entries": [],
+  "leaderCommit": 7
+}
+```
+
+### Drawing command payload
+
+```json
+{
+  "type": "stroke",
+  "x1": 40,
+  "y1": 60,
+  "x2": 120,
+  "y2": 90,
+  "color": "#2563eb",
+  "width": 6
+}
+```
+
+Clear commands use the following shape:
+
+```json
+{
+  "type": "clear"
+}
+```
+
+## Requirements
+
+- Docker Desktop
+- Docker Compose
+- A modern web browser
+
+Docker must be running before starting the project.
+
+## Run locally
+
+Start all services and build the images:
 
 ```bash
 docker compose up --build
 ```
 
-Open <http://localhost:3000>. Source folders are bind-mounted into containers and nodemon reloads changes during lessons. Stop with `docker compose down`.
+Open the drawing board:
 
-## Protocol tour
+<http://localhost:3000>
 
-- `POST /request-vote`: `{ term, candidateId, lastLogIndex, lastLogTerm }` -> `{ term, voteGranted }`.
-- `POST /append-entries`: `{ term, leaderId, prevLogIndex, prevLogTerm, entries, leaderCommit }`. This performs consistency checking, replication, and commit advancement.
-- `POST /heartbeat`: the dedicated 150 ms leader liveness RPC. It never carries drawing entries.
-- `GET /sync-log`: returns `{ term, entries, commitIndex }` as a read-only snapshot for gateway replay and inspection. `POST /sync-log`: leader-to-follower incremental catch-up with `{ term, leaderId, prevLogIndex, prevLogTerm, entries, leaderCommit }`; it appends missing committed entries and returns `logLength`, `matchIndex`, and `commitIndex`. Leaders trigger it from heartbeat-reported follower lag, so an empty restarted node catches up without a new drawing command.
-- `POST /command`: a leader accepts `{ type: "stroke", ... }` or `{ type: "clear" }` and returns a redirect from followers.
-- `GET /status` and `GET /health`: inspect role, term, leader, log length, and commit index.
-- Gateway `POST /broadcast` is used after apply; WebSocket clients receive the same JSON event and late clients receive the replay from `/sync-log`.
+Stop and remove the containers:
 
-Example stroke payload:
-
-```json
-{"type":"stroke","x1":40,"y1":60,"x2":120,"y2":90,"color":"#38bdf8","width":6}
+```bash
+docker compose down
 ```
+
+To rebuild after changing a dependency or Dockerfile:
+
+```bash
+docker compose up --build
+```
+
+## Hot reload
+
+The source directories for the gateway and every replica are bind-mounted into
+their containers. Each Node.js service runs with nodemon:
+
+```text
+gateway/src  →  /app/src
+replica1/src →  /app/src
+replica2/src →  /app/src
+replica3/src →  /app/src
+```
+
+When a mounted source file changes:
+
+1. nodemon stops the current Node.js process.
+2. The process handles `SIGTERM` and closes its server and timers.
+3. nodemon starts a fresh process.
+4. The restarted replica joins the cluster as a follower.
+5. The leader brings it up to date through replication or `/sync-log`.
 
 ## Failure demonstration
 
-In another terminal, stop one node:
+Start the project first, then stop one replica:
 
 ```bash
 docker compose stop replica1
 ```
 
-The remaining two nodes still form a majority and can elect a leader. Draw while it is stopped, then restart it:
+Two replicas remain, which is enough for a majority. The cluster can elect a
+new leader and continue accepting drawing commands.
+
+Restart the stopped replica:
 
 ```bash
 docker compose start replica1
+```
+
+Inspect its state:
+
+```bash
+curl http://localhost:4001/status
 curl http://localhost:4001/sync-log
 ```
 
-The leader heartbeat reports follower log length, then sends committed gaps through `POST /sync-log`; the restarted node catches up even when no new drawing command arrives.
+The leader reports follower log length during heartbeats and sends missing
+committed entries through `POST /sync-log`. This allows an empty restarted node
+to catch up even when no new drawing command is submitted.
 
-## Learning notes
+## Project structure
 
-1. Terms prevent an old leader from overwriting a newer decision. Every RPC rejects stale terms.
-2. Election timers are longer than the 150 ms heartbeat interval, so healthy followers do not campaign.
-3. `nextIndex` and `matchIndex` show how a leader repairs a lagging follower one entry at a time.
-4. A command is visible to browsers only after majority commit and state-machine application.
-5. This is a teaching implementation: it keeps state in memory and does not promise durable storage across container destruction.
+```text
+.
+├── docker-compose.yml
+├── frontend/
+│   └── index.html
+├── gateway/
+│   ├── Dockerfile
+│   ├── package.json
+│   └── src/
+│       └── index.js
+├── replica1/
+│   ├── Dockerfile
+│   ├── package.json
+│   └── src/
+│       └── index.js
+├── replica2/
+│   ├── Dockerfile
+│   ├── package.json
+│   └── src/
+│       └── index.js
+└── replica3/
+    ├── Dockerfile
+    ├── package.json
+    └── src/
+        └── index.js
+```
 
-## Layout
+The three replica source files share the same implementation. Their identity,
+port, and peer list are supplied through Docker Compose environment variables.
 
-- `frontend/index.html` — canvas, controls, WebSocket client, and replica dashboard.
-- `gateway/src/index.js` — WebSocket hub, leader discovery, routing, replay, and health API.
-- `replica{1,2,3}/src/index.js` — same small Raft node with different environment identity.
-- `docker-compose.yml` — one gateway, three replicas, nginx frontend, network, healthchecks, and bind mounts.
+## Learning checklist
+
+Use this project to study:
+
+- why a majority is required before committing an entry
+- how terms prevent stale leaders from making decisions
+- why election timeouts must be longer than heartbeat intervals
+- how `nextIndex` and `matchIndex` repair a follower's log
+- how a gateway can hide leader changes from WebSocket clients
+- how health checks control container startup order
+- how graceful shutdown supports hot reload and rolling replacement
+- why in-memory state is not a substitute for durable storage
+
+## Limitations
+
+This is a Mini-RAFT educational implementation. It intentionally does not
+provide:
+
+- persistent log storage
+- authentication or authorization
+- network partition simulation
+- production-grade backpressure
+- multi-process durable state recovery
+
+These limitations make the protocol easier to read and demonstrate. They are
+also useful discussion points when comparing this project with systems such as
+etcd, Consul, or Kubernetes control-plane components.
+
+## License
+
+This project is provided for educational use.
