@@ -1,0 +1,1 @@
+FROM node:20-alpineWORKDIR /appCOPY package.json .RUN npm installCOPY . .CMD ["npx", "nodemon", "-L", "--watch", "src", "src/index.js"]
